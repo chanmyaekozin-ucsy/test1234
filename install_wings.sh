@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "[+] Setting timezone to MMT (Asia/Yangon)..."
+timedatectl set-timezone Asia/Yangon
+
 echo "[+] Installing required packages..."
 apt update
 apt install -y curl tar unzip git redis-server
