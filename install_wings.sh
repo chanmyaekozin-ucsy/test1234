@@ -3,7 +3,6 @@ set -e
 
 
 echo "[+] Installing required packages..."
-apt update
 apt install -y curl tar unzip git redis-server
 
 echo "[+] Setting timezone to MMT (Asia/Yangon)..."
