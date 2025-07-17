@@ -7,8 +7,8 @@ api:
   port: 8080
   ssl:
     enabled: false
-    cert: /etc/letsencrypt/live/128.199.172.136/fullchain.pem
-    key: /etc/letsencrypt/live/128.199.172.136/privkey.pem
+    cert: /etc/letsencrypt/live/159.223.43.94/fullchain.pem
+    key: /etc/letsencrypt/live/159.223.43.94/privkey.pem
   upload_limit: 100
 system:
   data: /var/lib/pterodactyl/volumes
