@@ -1,14 +1,14 @@
 debug: false
-uuid: 83b153a9-ccd7-4f87-964e-544a7b3f0313
-token_id: ckqvHnXG5PcQs64Z
-token: M6Ac8QT9RSKDRGYkWAF7AwGSZRTbChsjlTSAWG7LkMKwBKxzCM5v2lb376KXQhL3
+uuid: 7e8d1602-cfb9-493f-b8f0-855f12cfa9d6
+token_id: v0bfkfsn2FroA6WY
+token: m8NueWQ0WMM21fSJRyrsJjOTy5rh92FTL9UWNELhIj3cdr9x9SNPCyKpFEELfume
 api:
   host: 0.0.0.0
   port: 8080
   ssl:
     enabled: false
-    cert: /etc/letsencrypt/live/165.232.169.137/fullchain.pem
-    key: /etc/letsencrypt/live/165.232.169.137/privkey.pem
+    cert: /etc/letsencrypt/live/143.198.216.18/fullchain.pem
+    key: /etc/letsencrypt/live/143.198.216.18/privkey.pem
   upload_limit: 100
 system:
   data: /var/lib/pterodactyl/volumes
