@@ -1,15 +1,18 @@
-#!/bin/bash
-set -e
-
-# --- Create coder user with sudo ---
-adduser --gecos "" coder
-usermod -aG sudo coder
-printf "coder ALL=(ALL) NOPASSWD:ALL\n" >/etc/sudoers.d/90-coder-nopasswd
-chmod 440 /etc/sudoers.d/90-coder-nopasswd
-
-# --- SSH key for coder ---
-mkdir -p /home/coder/.ssh
-cp /root/.ssh/authorized_keys /home/coder/.ssh/ 2>/dev/null  true
-chown -R coder:coder /home/coder/.ssh
-chmod 700 /home/coder/.ssh
-chmod 600 /home/coder/.ssh/authorized_keys
+debug: false
+uuid: 675c67d8-b623-4c63-88d5-8748ae3b73c1
+token_id: Tuo1FZSoJiHS4rd1
+token: Yf35Z08KF1qWPzSFEyTVvNvPHww8jKa7spzCInum6DmRBH8sW54uC2yBFAKOmqO3
+api:
+  host: 0.0.0.0
+  port: 8080
+  ssl:
+    enabled: false
+    cert: /etc/letsencrypt/live/128.199.111.79/fullchain.pem
+    key: /etc/letsencrypt/live/128.199.111.79/privkey.pem
+  upload_limit: 100
+system:
+  data: /var/lib/pterodactyl/volumes
+  sftp:
+    bind_port: 2022
+allowed_mounts: []
+remote: 'http://152.42.163.24'
