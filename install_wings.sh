@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # bootstrap_and_adopt.sh
 # - Bootstrap node (Docker, Wings service)
