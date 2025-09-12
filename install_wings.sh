@@ -1,9 +1,10 @@
 #!/bin/bash
 # bootstrap_and_adopt.sh
-# - Bootstrap node (Docker, Wings) if needed
+# - Bootstrap node (Docker, Wings)
+# - Run `wings configure` (Panel URL + token + node)
 # - Issue TLS cert for node FQDN
-# - (Optional) patch /etc/pterodactyl/config.yml to use TLS + host, restart wings
-# - Discover old UUIDs, prompt mapping to NEW_UUIDs, migrate files, remove old containers/data, restart Docker
+# - Patch Wings to use domain + cert
+# - Adopt OLD_UUID -> NEW_UUID (copy files, remove old, restart Docker)
 
 set -euo pipefail
 
@@ -12,8 +13,13 @@ CERT_BASE="/etc/letsencrypt/live"
 VOLBASE="/var/lib/pterodactyl/volumes"
 CFG="/etc/pterodactyl/config.yml"
 
+# <<< Your panel details for wings configure (edit if needed) >>>
+PANEL_URL_DEFAULT="https://panel.flash-myanmar.com"
+PANEL_TOKEN_DEFAULT="ptla_SgJaIlFIP88pN0nvtFlCXqdHUEVvU9HhhWR0AGEhqIn"
+NODE_ID_DEFAULT="15"
+
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing: $1"; exit 1; }; }
-say()  { printf '\n\e[1;36m%s\e[0m\n' "$*"; }
+say()  { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
 
 [[ $EUID -eq 0 ]] || { echo "Run as root."; exit 1; }
 
@@ -31,8 +37,7 @@ if ! command -v docker >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings || true
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
-  > /etc/apt/sources.list.d/docker.list
+https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
   apt-get update -y
   apt-get install -y docker-ce docker-ce-cli containerd.io
   systemctl enable --now docker
@@ -53,17 +58,6 @@ if ! command -v wings >/dev/null 2>&1; then
   chmod +x /usr/local/bin/wings
 
   mkdir -p /etc/pterodactyl
-
-  # Optional: fetch a starter config if missing (you can overwrite later with Panel-generated one)
-  if [[ ! -f "$CFG" ]]; then
-    read -rp "No /etc/pterodactyl/config.yml found. Download a starter config from your URL? [y/N]: " DL
-    if [[ "${DL,,}" == "y" ]]; then
-      read -rp "Enter config.yml URL: " CONFIG_URL
-      curl -fL "$CONFIG_URL" -o "$CFG" || { echo "Download failed."; exit 1; }
-    else
-      echo "Create or paste your panel-generated config into $CFG later."
-    fi
-  fi
 
   cat >/etc/systemd/system/wings.service <<'EOF'
 [Unit]
@@ -89,6 +83,30 @@ else
   say "[=] Wings already installed."
 fi
 
+# ---------- Configure Wings from Panel (token + node) ----------
+if [[ ! -f "$CFG" ]]; then
+  say "[+] No $CFG found. Running 'wings configure' with your Panel details."
+  read -rp "Panel URL [${PANEL_URL_DEFAULT}]: " PANEL_URL; PANEL_URL=${PANEL_URL:-$PANEL_URL_DEFAULT}
+  read -rp "Panel Token [hidden, press Enter to use default]: " -s PANEL_TOKEN_INP || true; echo
+  PANEL_TOKEN=${PANEL_TOKEN_INP:-$PANEL_TOKEN_DEFAULT}
+  read -rp "Node ID [${NODE_ID_DEFAULT}]: " NODE_ID; NODE_ID=${NODE_ID:-$NODE_ID_DEFAULT}
+
+  cd /etc/pterodactyl
+  wings configure --panel-url "$PANEL_URL" --token "$PANEL_TOKEN" --node "$NODE_ID"
+  say "[=] wings configure complete."
+else
+  say "[?] Detected $CFG. Re-run 'wings configure' to refresh token/node? (safe)"
+  read -rp "[y/N]: " RECONF; RECONF=${RECONF:-N}
+  if [[ "${RECONF,,}" == "y" ]]; then
+    read -rp "Panel URL [${PANEL_URL_DEFAULT}]: " PANEL_URL; PANEL_URL=${PANEL_URL:-$PANEL_URL_DEFAULT}
+    read -rp "Panel Token [hidden, press Enter to use default]: " -s PANEL_TOKEN_INP || true; echo
+    PANEL_TOKEN=${PANEL_TOKEN_INP:-$PANEL_TOKEN_DEFAULT}
+    read -rp "Node ID [${NODE_ID_DEFAULT}]: " NODE_ID; NODE_ID=${NODE_ID:-$NODE_ID_DEFAULT}
+    cd /etc/pterodactyl
+    wings configure --panel-url "$PANEL_URL" --token "$PANEL_TOKEN" --node "$NODE_ID"
+  fi
+fi
+
 # ---------- Ask domain & issue cert ----------
 read -rp "Enter node domain (e.g. vip-running2.flash-myanmar.com): " DOMAIN
 [[ -n "${DOMAIN:-}" ]] || { echo "Domain cannot be empty."; exit 1; }
@@ -99,7 +117,7 @@ if ! command -v certbot >/dev/null 2>&1; then
   apt-get install -y certbot
 fi
 
-# Free port 80 if nginx is using it (for standalone HTTP-01)
+# Free port 80 for standalone HTTP-01
 NGINX_STOPPED=0
 if ss -ltnp | grep -q ':80 '; then
   if systemctl is-active --quiet nginx; then
@@ -117,7 +135,6 @@ CERT_DIR="${CERT_BASE}/${DOMAIN}"
 [[ -f "${CERT_DIR}/fullchain.pem" && -f "${CERT_DIR}/privkey.pem" ]] || { echo "Cert not found in ${CERT_DIR}"; exit 1; }
 say "[=] Certificate OK: ${CERT_DIR}"
 
-# Bring nginx back if we stopped it only for issuance
 [[ "$NGINX_STOPPED" -eq 1 ]] && systemctl start nginx || true
 
 # ---------- Patch Wings config to use TLS + host ----------
@@ -126,7 +143,7 @@ if [[ -f "$CFG" ]]; then
   read -rp "[Y/n]: " DO_PATCH; DO_PATCH=${DO_PATCH:-Y}
   if [[ "${DO_PATCH,,}" == "y" ]]; then
     cp -a "$CFG" "${CFG}.bak.$(date +%F_%H%M%S)"
-    # Ensure ssl: block exists
+    # Ensure ssl block exists
     if ! grep -q '^ssl:' "$CFG"; then
       cat >>"$CFG" <<EOF
 
@@ -137,7 +154,6 @@ ssl:
 EOF
     fi
     sed -i "s|^host:.*|host: ${DOMAIN}|" "$CFG" || true
-    sed -i "s|^panel_url:.*|panel_url: https://panel.flash-myanmar.com|" "$CFG" || true
     sed -i "s|^  enabled:.*|  enabled: true|" "$CFG" || true
     sed -i "s|^  cert:.*|  cert: ${CERT_DIR}/fullchain.pem|" "$CFG" || true
     sed -i "s|^  key:.*|  key:  ${CERT_DIR}/privkey.pem|" "$CFG" || true
@@ -157,7 +173,7 @@ say "== Discovering old servers on this node =="
 declare -A UUID_PORTS
 declare -A UUID_CIDS
 
-# From containers (running or stopped)
+# From containers
 for ID in $(docker ps -a -q); do
   UUID=$(docker inspect "$ID" --format '{{ index .Config.Labels "io.pterodactyl.server.uuid" }}' 2>/dev/null || true)
   [[ -z "$UUID" ]] && continue
@@ -166,7 +182,7 @@ for ID in $(docker ps -a -q); do
   UUID_CIDS["$UUID"]+="$ID "
 done
 
-# From volumes directory
+# From volumes
 if [[ -d "$VOLBASE" ]]; then
   while IFS= read -r d; do
     base=$(basename "$d")
@@ -238,17 +254,13 @@ for OLD in "${!UUID_PORTS[@]}"; do
     docker rm -f ${UUID_CIDS[$OLD]} || true
   fi
 
-  # 6) Show old ports (info)
-  PORTJSON="${UUID_PORTS[$OLD]}"
-  echo "Old port bindings: ${PORTJSON}"
-
-  # 7) Delete old data dir
+  # 6) Delete old data dir
   if [[ -d "$OLDDIR" ]]; then
     echo "🧹 Removing old data dir: $OLDDIR"
     rm -rf "$OLDDIR"
   fi
 
-  # 8) Restart Docker to free any stale docker-proxy
+  # 7) Restart Docker to free any stale docker-proxy
   echo "🔄 Restarting Docker to free ports..."
   systemctl restart docker || true
 
@@ -257,3 +269,5 @@ done
 
 say "All requested mappings processed."
 echo "Start servers from the Panel and watch:  journalctl -u wings -f"
+
+
