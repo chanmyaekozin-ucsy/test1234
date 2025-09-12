@@ -1,10 +1,11 @@
+
 #!/bin/bash
 # bootstrap_and_adopt.sh
-# - Bootstrap node (Docker, Wings)
-# - Run `wings configure` (Panel URL + token + node)
-# - Issue TLS cert for node FQDN
-# - Patch Wings to use domain + cert
-# - Adopt OLD_UUID -> NEW_UUID (copy files, remove old, restart Docker)
+# - Bootstrap node (Docker, Wings service)
+# - Prompt to paste Panel-generated "wings configure ..." line & execute it
+# - Issue TLS cert for node FQDN (Let's Encrypt)
+# - Optionally patch /etc/pterodactyl/config.yml to use TLS + host, restart Wings
+# - Discover OLD_UUIDs -> prompt NEW_UUIDs, migrate files, remove old containers/data, restart Docker
 
 set -euo pipefail
 
@@ -12,11 +13,6 @@ EMAIL="chanmyaekozin@gmail.com"
 CERT_BASE="/etc/letsencrypt/live"
 VOLBASE="/var/lib/pterodactyl/volumes"
 CFG="/etc/pterodactyl/config.yml"
-
-# <<< Your panel details for wings configure (edit if needed) >>>
-PANEL_URL_DEFAULT="https://panel.flash-myanmar.com"
-PANEL_TOKEN_DEFAULT="ptla_SgJaIlFIP88pN0nvtFlCXqdHUEVvU9HhhWR0AGEhqIn"
-NODE_ID_DEFAULT="15"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing: $1"; exit 1; }; }
 say()  { printf '\n\033[1;36m%s\033[0m\n' "$*"; }
@@ -37,7 +33,7 @@ if ! command -v docker >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings || true
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" >/etc/apt/sources.list.d/docker.list
   apt-get update -y
   apt-get install -y docker-ce docker-ce-cli containerd.io
   systemctl enable --now docker
@@ -56,9 +52,16 @@ if ! command -v wings >/dev/null 2>&1; then
   esac
   curl -L -o /usr/local/bin/wings "https://github.com/pterodactyl/wings/releases/latest/download/${W}"
   chmod +x /usr/local/bin/wings
+else
+  say "[=] Wings binary already present."
+fi
 
-  mkdir -p /etc/pterodactyl
+# Ensure config dir
+mkdir -p /etc/pterodactyl
 
+# Wings systemd service (idempotent)
+if [[ ! -f /etc/systemd/system/wings.service ]]; then
+  say "[+] Creating Wings systemd service..."
   cat >/etc/systemd/system/wings.service <<'EOF'
 [Unit]
 Description=Pterodactyl Wings Daemon
@@ -76,35 +79,21 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-
   systemctl daemon-reload
-  systemctl enable --now wings || true
-else
-  say "[=] Wings already installed."
 fi
+systemctl enable --now wings || true
 
-# ---------- Configure Wings from Panel (token + node) ----------
-if [[ ! -f "$CFG" ]]; then
-  say "[+] No $CFG found. Running 'wings configure' with your Panel details."
-  read -rp "Panel URL [${PANEL_URL_DEFAULT}]: " PANEL_URL; PANEL_URL=${PANEL_URL:-$PANEL_URL_DEFAULT}
-  read -rp "Panel Token [hidden, press Enter to use default]: " -s PANEL_TOKEN_INP || true; echo
-  PANEL_TOKEN=${PANEL_TOKEN_INP:-$PANEL_TOKEN_DEFAULT}
-  read -rp "Node ID [${NODE_ID_DEFAULT}]: " NODE_ID; NODE_ID=${NODE_ID:-$NODE_ID_DEFAULT}
-
-  cd /etc/pterodactyl
-  wings configure --panel-url "$PANEL_URL" --token "$PANEL_TOKEN" --node "$NODE_ID"
-  say "[=] wings configure complete."
+# ---------- Paste & run Panel-provided "wings configure" line ----------
+say "[?] Paste the EXACT line from Panel to configure this node (example:"
+echo "    cd /etc/pterodactyl && sudo wings configure --panel-url https://panel.flash-myanmar.com --token XXXXX --node 15"
+read -r -p "Paste here (or leave empty to skip): " CONFIG_CMD
+if [[ -n "${CONFIG_CMD:-}" ]]; then
+  say "[*] Running your configure command..."
+  # Ensure we are in a shell that can run 'cd ... && ...'
+  bash -lc "$CONFIG_CMD"
+  say "[=] 'wings configure' finished."
 else
-  say "[?] Detected $CFG. Re-run 'wings configure' to refresh token/node? (safe)"
-  read -rp "[y/N]: " RECONF; RECONF=${RECONF:-N}
-  if [[ "${RECONF,,}" == "y" ]]; then
-    read -rp "Panel URL [${PANEL_URL_DEFAULT}]: " PANEL_URL; PANEL_URL=${PANEL_URL:-$PANEL_URL_DEFAULT}
-    read -rp "Panel Token [hidden, press Enter to use default]: " -s PANEL_TOKEN_INP || true; echo
-    PANEL_TOKEN=${PANEL_TOKEN_INP:-$PANEL_TOKEN_DEFAULT}
-    read -rp "Node ID [${NODE_ID_DEFAULT}]: " NODE_ID; NODE_ID=${NODE_ID:-$NODE_ID_DEFAULT}
-    cd /etc/pterodactyl
-    wings configure --panel-url "$PANEL_URL" --token "$PANEL_TOKEN" --node "$NODE_ID"
-  fi
+  say "[=] Skipped 'wings configure' (make sure $CFG exists already)."
 fi
 
 # ---------- Ask domain & issue cert ----------
@@ -170,8 +159,8 @@ fi
 need docker; need rsync
 say "== Discovering old servers on this node =="
 
-declare -A UUID_PORTS
-declare -A UUID_CIDS
+declare -A UUID_PORTS=()
+declare -A UUID_CIDS=()
 
 # From containers
 for ID in $(docker ps -a -q); do
@@ -210,7 +199,8 @@ echo
 for OLD in "${!UUID_PORTS[@]}"; do
   read -rp "NEW_UUID for OLD ${OLD}: " NEW
   if [[ -z "$NEW" ]]; then
-    echo "Skipping ${OLD}."; continue
+    echo "Skipping ${OLD}."
+    continue
   fi
 
   OLDDIR="${VOLBASE}/${OLD}"
@@ -269,5 +259,4 @@ done
 
 say "All requested mappings processed."
 echo "Start servers from the Panel and watch:  journalctl -u wings -f"
-
 
