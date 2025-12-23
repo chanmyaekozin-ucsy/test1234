@@ -40,7 +40,7 @@ fi
 echo "----------------------------------------"
 
 # 2. INSTALL REQUIREMENTS
-if [ -f "requirements.txt" ]; then
+if [ -f "Backend-Host-Python/requirements.txt" ]; then
     echo "📦 Installing dependencies from requirements.txt..."
     pip install -r requirements.txt
 else
