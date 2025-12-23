@@ -51,4 +51,4 @@ echo "----------------------------------------"
 
 # 3. START THE BOT
 echo "🔥 Starting Gunicorn Server..."
-python app.py
+python Backend-Host-Python/init_db.py
